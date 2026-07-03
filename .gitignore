@@ -1,0 +1,25 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Secrets — never commit
+.env
+backend/.env
+frontend/.env
+
+# Generated output
+backend/data/generated/
+backend/data/uploads/
+
+# Frontend build artifacts
+frontend/node_modules/
+frontend/.next/
+frontend/dist/
+
+# Real survey respondent data (PII) — keep local only
+Untitled form.csv
+
+# Internal planning docs — keep local only, not for the public repo
+PRD.md
+TASKS.md
