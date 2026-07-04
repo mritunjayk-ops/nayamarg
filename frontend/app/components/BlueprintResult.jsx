@@ -16,8 +16,9 @@ export default function BlueprintResult({ result, pdfUrl, onRestart }) {
   const bp = result.blueprint || {};
   const snapshot = bp.snapshot || {};
   const paths = Array.isArray(bp.paths) ? bp.paths : [];
-  const plan = bp.plan && typeof bp.plan === "object" ? bp.plan : {};
-  const days = Array.isArray(plan.days) ? plan.days : [];
+  const learning = bp.learning && typeof bp.learning === "object" ? bp.learning : {};
+  const courses = Array.isArray(learning.courses) ? learning.courses : [];
+  const modules = Array.isArray(learning.modules) ? learning.modules : [];
   const projects = Array.isArray(bp.projects) ? bp.projects : [];
   const strengths = Array.isArray(bp.strengths) ? bp.strengths : [];
   const bullets = Array.isArray(bp.resume_bullets) ? bp.resume_bullets : [];
@@ -93,34 +94,43 @@ export default function BlueprintResult({ result, pdfUrl, onRestart }) {
         </section>
       )}
 
-      {days.length > 0 && (
+      {modules.length > 0 && (
         <section className="bp-block">
-          <h3>Your day-by-day plan{plan.total_days ? ` · ${plan.total_days} days` : ""}</h3>
-          {plan.rationale && <p className="prose" style={{ marginBottom: 20 }}>{plan.rationale}</p>}
-          <div className="timeline">
-            {days.map((d, i) => (
-              <div className="week" key={i}>
-                <div className="wk">Day {d.day ?? i + 1}</div>
-                <h5>{d.focus || "Focus"}</h5>
-                {Array.isArray(d.topics) && d.topics.length > 0 && (
-                  <div className="topics">
-                    {d.topics.map((t, j) => (
-                      <span key={j}>{t}</span>
-                    ))}
-                  </div>
-                )}
-                {Array.isArray(d.courses) && d.courses.length > 0 && (
-                  <div className="courses">
-                    {d.courses.map((c, j) => (
-                      <a key={j} className="course" href={c.url || "#"} target="_blank" rel="noreferrer">
-                        {c.name || "Course"}{c.provider ? ` · ${c.provider}` : ""}
-                      </a>
-                    ))}
-                  </div>
-                )}
-                {d.task && (
-                  <div className="out"><b>Task:</b> {d.task}</div>
-                )}
+          <h3>Your learning plan{learning.estimated_duration ? ` · about ${learning.estimated_duration}` : ""}</h3>
+          <p className="prose" style={{ marginBottom: 18 }}>
+            {learning.pace_assumption ? `${learning.pace_assumption}. ` : ""}
+            Work through the topics at your own pace — check each one off as you master it. There's no fixed deadline.
+          </p>
+
+          {courses.length > 0 && (
+            <div className="course-list">
+              {courses.map((c, i) => (
+                <a key={i} className="course" href={c.url || "#"} target="_blank" rel="noreferrer">
+                  {c.name || "Course"}{c.provider ? ` · ${c.provider}` : ""}
+                </a>
+              ))}
+            </div>
+          )}
+
+          <div className="modules">
+            {modules.map((m, i) => (
+              <div className="module" key={i}>
+                <div className="module-title">{m.title || `Module ${i + 1}`}</div>
+                <div className="topics-list">
+                  {(Array.isArray(m.topics) ? m.topics : []).map((t, j) => (
+                    <div className="topic" key={j}>
+                      <span className="topic-check" aria-hidden="true" />
+                      <div className="topic-body">
+                        <div className="topic-head">
+                          <span className="topic-name">{t.topic || "Topic"}</span>
+                          {t.estimate && <span className="topic-est">{t.estimate}</span>}
+                        </div>
+                        {t.details && <div className="topic-details">{t.details}</div>}
+                        {t.course && <div className="topic-course">from {t.course}</div>}
+                      </div>
+                    </div>
+                  ))}
+                </div>
               </div>
             ))}
           </div>

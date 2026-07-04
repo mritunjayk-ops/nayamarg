@@ -82,22 +82,29 @@ def export_blueprint_pdf(blueprint: dict[str, Any], candidate_id: int, tier: str
         story.append(_bullets(path.get("proof_points", []), styles["BodyText"]))
 
     story.append(PageBreak())
-    plan = blueprint.get("plan", {}) if isinstance(blueprint.get("plan"), dict) else {}
-    days = plan.get("days", [])
-    story.append(_para(f"Your Day-by-Day Plan ({plan.get('total_days', len(days))} days)", styles["Section"]))
-    if plan.get("rationale"):
-        story.append(_para(plan["rationale"], styles["Tight"]))
-        story.append(Spacer(1, 6))
-    for i, day in enumerate(days, start=1):
-        story.append(_para(f"Day {day.get('day', i)}: {day.get('focus', '')}", styles["Heading3"]))
-        if day.get("topics"):
-            story.append(_bullets(day.get("topics", []), styles["BodyText"]))
-        for course in day.get("courses", []) or []:
+    learning = blueprint.get("learning", {}) if isinstance(blueprint.get("learning"), dict) else {}
+    duration = learning.get("estimated_duration", "")
+    story.append(_para(f"Your Learning Plan{f' — approx. {duration}' if duration else ''}", styles["Section"]))
+    if learning.get("pace_assumption"):
+        story.append(_para(learning["pace_assumption"], styles["Tight"]))
+        story.append(Spacer(1, 4))
+    if learning.get("courses"):
+        story.append(_para("Recommended courses (you only need these):", styles["Tight"]))
+        course_lines = []
+        for course in learning.get("courses", []):
             label = " - ".join(x for x in [course.get("name"), course.get("provider")] if x)
-            url = course.get("url", "")
-            story.append(_para(f"Course: {label} {url}".strip(), styles["Tight"]))
-        if day.get("task"):
-            story.append(_para(f"Task: {day['task']}", styles["Tight"]))
+            course_lines.append(f"{label} {course.get('url', '')}".strip())
+        story.append(_bullets(course_lines, styles["Tight"]))
+        story.append(Spacer(1, 6))
+    for module in learning.get("modules", []):
+        story.append(_para(module.get("title", "Module"), styles["Heading3"]))
+        for topic in module.get("topics", []):
+            head = topic.get("topic", "")
+            est = topic.get("estimate", "")
+            story.append(_para(f"{head}{f' — {est}' if est else ''}", styles["Tight"]))
+            detail_bits = [b for b in [topic.get("details", ""), (f"Course: {topic.get('course')}" if topic.get("course") else "")] if b]
+            if detail_bits:
+                story.append(_para(" · ".join(detail_bits), styles["Small"]))
 
     story.append(PageBreak())
     story.append(_para("Projects", styles["Section"]))

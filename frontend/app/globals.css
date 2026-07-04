@@ -886,26 +886,102 @@ a {
   font-weight: 600;
 }
 
-.week .courses {
+/* learning plan (topic-based) */
+.course-list {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
-  margin-bottom: 8px;
+  gap: 10px;
+  margin-bottom: 26px;
 }
 
-.week .course {
-  font-size: 12.5px;
-  padding: 5px 11px;
-  border-radius: 6px;
+.course {
+  font-size: 13px;
+  padding: 9px 14px;
+  border-radius: 999px;
   border: 1px solid var(--gold-line);
   background: var(--gold-soft);
   color: var(--gold-bright);
   text-decoration: none;
-  transition: border-color 0.15s ease;
+  transition: border-color 0.15s ease, transform 0.15s ease;
 }
 
-.week .course:hover {
+.course:hover {
   border-color: var(--gold);
+  transform: translateY(-1px);
+}
+
+.modules {
+  display: grid;
+  gap: 24px;
+}
+
+.module-title {
+  font-family: var(--font-display);
+  font-size: 1.2rem;
+  color: var(--text);
+  margin-bottom: 14px;
+  padding-bottom: 9px;
+  border-bottom: 1px solid var(--line);
+}
+
+.topics-list {
+  display: grid;
+  gap: 14px;
+}
+
+.topic {
+  display: flex;
+  gap: 13px;
+  align-items: flex-start;
+}
+
+.topic-check {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  margin-top: 3px;
+  border-radius: 6px;
+  border: 1.5px solid var(--line-strong);
+  background: var(--bg-2);
+}
+
+.topic-body {
+  min-width: 0;
+}
+
+.topic-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.topic-name {
+  font-weight: 600;
+  font-size: 15px;
+  color: var(--text);
+}
+
+.topic-est {
+  font-size: 12px;
+  padding: 2px 9px;
+  border-radius: 999px;
+  background: var(--bg-3);
+  color: var(--gold-bright);
+  border: 1px solid var(--gold-line);
+  white-space: nowrap;
+}
+
+.topic-details {
+  font-size: 13.5px;
+  color: var(--text-muted);
+  margin-top: 4px;
+}
+
+.topic-course {
+  font-size: 12px;
+  color: var(--text-faint);
+  margin-top: 3px;
 }
 
 /* projects */

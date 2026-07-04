@@ -127,14 +127,10 @@ def synthesize(state: AgentState) -> AgentState:
 
 
 def _synthesis_prompt(profile: dict[str, Any], evidence: list[dict[str, str]], path_count: int, sample: bool, language: str) -> str:
-    plan_rule = (
-        "Include a SHORT preview plan of only the first 5-6 days (this is a free sample)."
+    scope = (
+        "This is a FREE SAMPLE: include only the first 1-2 modules of the curriculum as a preview."
         if sample
-        else (
-            "Include a COMPLETE day-by-day plan. Choose total_days yourself based on how much this "
-            "person realistically needs to become job-ready (usually 21-60 days) and justify it in 'rationale'. "
-            "Do NOT force a fixed length. Sequence days so skills build on each other; never repeat a day."
-        )
+        else "Include the COMPLETE curriculum: every module and topic needed to become genuinely job-ready."
     )
     return f"""You are a senior career-transition advisor for Indian UPSC / competitive-exam aspirants moving into new careers. Write in {language}. Be specific, honest, empathetic, and evidence-grounded. No generic motivation. Reframe their exam years as real transferable capability — never hide the gap, reposition it.
 
@@ -146,10 +142,16 @@ CANDIDATE:
 LIVE RESEARCH EVIDENCE (use for REAL course names/providers/URLs and current market signals; cite URLs you actually use; never invent URLs):
 {json.dumps(evidence, ensure_ascii=False)[:EVIDENCE_CHARS]}
 
-Produce exactly {path_count} career paths, ranked, each scored 0-100 for fit.
+Produce exactly {path_count} career paths, ranked, each scored 0-100 for fit. Then build a realistic LEARNING PLAN for the TOP path.
 
-{plan_rule}
-For each day: name concrete topics, attach a specific real course from the evidence where relevant (name + provider + url), and give one small daily task/deliverable. Keep each day concise but concrete.
+BE HONEST ABOUT TIME — this is critical. Real, job-ready skill takes MONTHS, not weeks. As a rough benchmark at about 2 hours of focused study per day: core data analysis ~2 months, machine learning ~1 further month, AI / deep learning ~2 further months. Do NOT compress timelines or promise fast results. Overall duration should realistically land around 3-6 months for a full tech/data transition.
+
+For the learning plan:
+- Recommend only 2-3 courses TOTAL (people cannot start a new course every day). Prefer real courses named in the evidence.
+- Break the learning into MODULES, and within each module list TOPICS drawn from those 2-3 courses.
+- For EACH topic give: what to learn, which recommended course covers it, and a realistic time estimate phrased like "~2 days at 2 hrs/day" or "~6 hours".
+- Give an overall estimated_duration as a FLEXIBLE range (e.g. "3-4 months") and state the pace assumption. Do NOT enumerate day numbers — progress is tracked by topic completion, not by day.
+{scope}
 
 Return ONLY valid JSON with EXACTLY this schema:
 {{
@@ -157,10 +159,11 @@ Return ONLY valid JSON with EXACTLY this schema:
   "diagnosis": "150-220 word honest, specific read of where they stand and the way forward",
   "strengths": ["8-12 concrete transferable strengths"],
   "paths": [{{"rank":1,"title":"","score":0,"why":"specific fit rationale grounded in their background and the market","proof_points":["","",""]}}],
-  "plan": {{
-    "total_days": 0,
-    "rationale": "why this length fits this person",
-    "days": [{{"day":1,"focus":"","topics":["",""],"courses":[{{"name":"","provider":"","url":""}}],"task":""}}]
+  "learning": {{
+    "estimated_duration": "flexible range, e.g. 3-4 months",
+    "pace_assumption": "e.g. assuming about 2 hours of focused study per day",
+    "courses": [{{"name":"","provider":"","url":""}}],
+    "modules": [{{"title":"","topics":[{{"topic":"","details":"what to learn","course":"which recommended course covers it","estimate":"~2 days at 2 hrs/day"}}]}}]
   }},
   "projects": [{{"name":"","description":"","skills":["",""]}}],
   "resume_bullets": ["4-6 truthful resume bullets reframing exam prep plus new skills"],
@@ -169,7 +172,9 @@ Return ONLY valid JSON with EXACTLY this schema:
 
 Rules:
 - Exactly {path_count} paths.
-- Courses must be real and findable — prefer ones named in the evidence; never invent fake URLs.
+- Only 2-3 courses total; every topic's "course" must be one of them.
+- Time estimates must be realistic (the total spans months), each phrased with a study-pace assumption.
+- Courses must be real — prefer ones named in the evidence; never invent fake URLs.
 - Do not mention being an AI model."""
 
 
@@ -193,11 +198,16 @@ def _normalize_blueprint(bp: dict[str, Any], profile: dict[str, Any], path_count
     bp["strengths"] = [s for s in bp.get("strengths", []) if s] if isinstance(bp.get("strengths"), list) else []
     bp["paths"] = [p for p in bp.get("paths", []) if isinstance(p, dict)][:path_count] if isinstance(bp.get("paths"), list) else []
 
-    plan = bp.get("plan") if isinstance(bp.get("plan"), dict) else {}
-    plan["days"] = [d for d in plan.get("days", []) if isinstance(d, dict)] if isinstance(plan.get("days"), list) else []
-    plan["total_days"] = plan.get("total_days") or len(plan["days"])
-    plan["rationale"] = plan.get("rationale") or ""
-    bp["plan"] = plan
+    learning = bp.get("learning") if isinstance(bp.get("learning"), dict) else {}
+    learning["estimated_duration"] = learning.get("estimated_duration") or ""
+    learning["pace_assumption"] = learning.get("pace_assumption") or ""
+    learning["courses"] = [c for c in learning.get("courses", []) if isinstance(c, dict)][:4] if isinstance(learning.get("courses"), list) else []
+    modules = [m for m in learning.get("modules", []) if isinstance(m, dict)] if isinstance(learning.get("modules"), list) else []
+    for m in modules:
+        m["title"] = m.get("title") or ""
+        m["topics"] = [t for t in m.get("topics", []) if isinstance(t, dict)] if isinstance(m.get("topics"), list) else []
+    learning["modules"] = modules
+    bp["learning"] = learning
 
     bp["projects"] = [p for p in bp.get("projects", []) if isinstance(p, dict)] if isinstance(bp.get("projects"), list) else []
     bp["resume_bullets"] = [b for b in bp.get("resume_bullets", []) if b] if isinstance(bp.get("resume_bullets"), list) else []
@@ -208,9 +218,11 @@ def _normalize_blueprint(bp: dict[str, Any], profile: dict[str, Any], path_count
 def _summary(bp: dict[str, Any], tier: str) -> str:
     paths = bp.get("paths", [])
     top = paths[0].get("title", "your next path") if paths else "your next path"
-    days = len(bp.get("plan", {}).get("days", []))
+    learning = bp.get("learning", {})
+    topics = sum(len(m.get("topics", [])) for m in learning.get("modules", []))
+    duration = learning.get("estimated_duration") or "a few months"
     kind = "sample" if tier == "sample" else "full"
-    return f"Your {kind} blueprint: {len(paths)} fitted path(s) led by {top}, with a {days}-day learning plan."
+    return f"Your {kind} blueprint: {len(paths)} fitted path(s) led by {top}, with a {topics}-topic plan spanning about {duration}."
 
 
 def _fallback_blueprint(profile: dict[str, Any], path_count: int, sample: bool) -> dict[str, Any]:
@@ -221,11 +233,24 @@ def _fallback_blueprint(profile: dict[str, Any], path_count: int, sample: bool) 
         {"rank": 2, "title": "AI Product / Operations Analyst", "score": 78, "why": "Uses your writing, documentation, and process discipline in fast-growing AI-adjacent roles.", "proof_points": ["Low coding barrier to start", "Values written clarity you already have", "Growing at startups and services firms"]},
         {"rank": 3, "title": "Junior AI / Software Builder", "score": 74, "why": "If you enjoy building, exam-grade discipline transfers well to learning to code.", "proof_points": ["GitHub portfolio proves skill directly", "Clear self-study path", "High ceiling"]},
     ][:path_count]
-    n = 6 if sample else 21
-    days = [
-        {"day": d, "focus": f"Foundation day {d}", "topics": ["Core concept for the day", "Hands-on practice"], "courses": [], "task": "Produce one small visible artifact (note, sheet, or repo commit)."}
-        for d in range(1, n + 1)
+    modules = [
+        {"title": "Foundations", "topics": [
+            {"topic": "Spreadsheets & data cleaning", "details": "pivots, lookups, cleaning messy data", "course": "Google Data Analytics (Coursera)", "estimate": "~4 days at 2 hrs/day"},
+            {"topic": "SQL basics", "details": "SELECT, JOIN, GROUP BY, aggregations", "course": "Google Data Analytics (Coursera)", "estimate": "~5 days at 2 hrs/day"},
+        ]},
+        {"title": "Core analysis", "topics": [
+            {"topic": "Python for data (pandas)", "details": "dataframes, cleaning, aggregation", "course": "Google Data Analytics (Coursera)", "estimate": "~2 weeks at 2 hrs/day"},
+            {"topic": "Visualization & dashboards", "details": "charts, Tableau or Power BI basics", "course": "Google Data Analytics (Coursera)", "estimate": "~1 week at 2 hrs/day"},
+        ]},
     ]
+    if sample:
+        modules = modules[:1]
+    learning = {
+        "estimated_duration": "3-4 months",
+        "pace_assumption": "assuming about 2 hours of focused study per day",
+        "courses": [{"name": "Google Data Analytics Professional Certificate", "provider": "Coursera", "url": "https://www.coursera.org/professional-certificates/google-data-analytics"}],
+        "modules": modules,
+    }
     return {
         "snapshot": {
             "age_group": profile.get("age_group", ""),
@@ -239,7 +264,7 @@ def _fallback_blueprint(profile: dict[str, Any], path_count: int, sample: bool) 
         "diagnosis": "We could not reach the AI service to generate a fully personalized read just now. This is a safe fallback plan; regenerate for a tailored version.",
         "strengths": ["Structured self-study", "Analytical writing", "Research synthesis", "Discipline under pressure", "Current-affairs awareness", "Quantitative reasoning"],
         "paths": paths,
-        "plan": {"total_days": n, "rationale": "Baseline foundation plan.", "days": days},
+        "learning": learning,
         "projects": [{"name": "Portfolio starter project", "description": "A small, visible project that proves one job-relevant skill.", "skills": ["analysis", "communication"]}],
         "resume_bullets": ["Reframed competitive-exam preparation as structured research and analytical writing.", "Building portfolio projects to prove job-relevant skills."],
         "market_signals": [],
