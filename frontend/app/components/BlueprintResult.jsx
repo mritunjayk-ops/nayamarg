@@ -16,7 +16,8 @@ export default function BlueprintResult({ result, pdfUrl, onRestart }) {
   const bp = result.blueprint || {};
   const snapshot = bp.snapshot || {};
   const paths = Array.isArray(bp.paths) ? bp.paths : [];
-  const weekly = Array.isArray(bp.weekly_plan) ? bp.weekly_plan : [];
+  const plan = bp.plan && typeof bp.plan === "object" ? bp.plan : {};
+  const days = Array.isArray(plan.days) ? plan.days : [];
   const projects = Array.isArray(bp.projects) ? bp.projects : [];
   const strengths = Array.isArray(bp.strengths) ? bp.strengths : [];
   const bullets = Array.isArray(bp.resume_bullets) ? bp.resume_bullets : [];
@@ -92,23 +93,33 @@ export default function BlueprintResult({ result, pdfUrl, onRestart }) {
         </section>
       )}
 
-      {weekly.length > 0 && (
+      {days.length > 0 && (
         <section className="bp-block">
-          <h3>Your weekly roadmap</h3>
+          <h3>Your day-by-day plan{plan.total_days ? ` · ${plan.total_days} days` : ""}</h3>
+          {plan.rationale && <p className="prose" style={{ marginBottom: 20 }}>{plan.rationale}</p>}
           <div className="timeline">
-            {weekly.map((w, i) => (
+            {days.map((d, i) => (
               <div className="week" key={i}>
-                <div className="wk">Week {w.week ?? i + 1}</div>
-                <h5>{w.theme || "Focus"}</h5>
-                {Array.isArray(w.topics) && w.topics.length > 0 && (
+                <div className="wk">Day {d.day ?? i + 1}</div>
+                <h5>{d.focus || "Focus"}</h5>
+                {Array.isArray(d.topics) && d.topics.length > 0 && (
                   <div className="topics">
-                    {w.topics.map((t, j) => (
+                    {d.topics.map((t, j) => (
                       <span key={j}>{t}</span>
                     ))}
                   </div>
                 )}
-                {w.output && (
-                  <div className="out"><b>Deliverable:</b> {w.output}</div>
+                {Array.isArray(d.courses) && d.courses.length > 0 && (
+                  <div className="courses">
+                    {d.courses.map((c, j) => (
+                      <a key={j} className="course" href={c.url || "#"} target="_blank" rel="noreferrer">
+                        {c.name || "Course"}{c.provider ? ` · ${c.provider}` : ""}
+                      </a>
+                    ))}
+                  </div>
+                )}
+                {d.task && (
+                  <div className="out"><b>Task:</b> {d.task}</div>
                 )}
               </div>
             ))}

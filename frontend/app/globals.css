@@ -886,6 +886,28 @@ a {
   font-weight: 600;
 }
 
+.week .courses {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.week .course {
+  font-size: 12.5px;
+  padding: 5px 11px;
+  border-radius: 6px;
+  border: 1px solid var(--gold-line);
+  background: var(--gold-soft);
+  color: var(--gold-bright);
+  text-decoration: none;
+  transition: border-color 0.15s ease;
+}
+
+.week .course:hover {
+  border-color: var(--gold);
+}
+
 /* projects */
 .projects {
   display: grid;

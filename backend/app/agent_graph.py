@@ -1,6 +1,21 @@
+"""Blueprint engine.
+
+Agentic in the way that matters: the model plans its own research per candidate,
+we run those live web searches (Tavily) to find real courses and market signals,
+and the model synthesizes a genuinely personalized blueprint — biased toward
+tech/data/AI where the background fits — with a variable-length, day-by-day plan.
+
+Flow:  normalize → research (plan queries → Tavily) → synthesize → export_pdf
+
+Control flow is deterministic (reliable, no runaway loops); the *content* is
+model-driven and evidence-grounded. If no model provider is available, a small
+deterministic fallback keeps the app working.
+"""
+
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any
 
 from langgraph.graph import END, StateGraph
@@ -10,269 +25,208 @@ from app.model_gateway import complete_json
 from app.models import AgentState
 from app.pdf import export_blueprint_pdf
 
+logger = logging.getLogger("nayamarg.agent")
 
-BASE_COURSES = {
-    "Data Analyst": [
-        "Excel for analysis: pivots, lookup formulas, dashboards",
-        "SQL: SELECT, JOIN, GROUP BY, CTEs, window functions",
-        "Python: pandas, numpy, matplotlib/seaborn",
-        "Statistics: distributions, hypothesis testing, regression basics",
-        "BI: Power BI or Tableau dashboarding",
-    ],
-    "AI Product / Operations Analyst": [
-        "AI fundamentals: LLMs, embeddings, prompting, evaluation",
-        "No-code/low-code automation with Zapier or Make",
-        "Product analytics: funnels, retention, activation metrics",
-        "Documentation: PRDs, SOPs, process maps",
-        "Workflow automation using APIs and spreadsheets",
-    ],
-    "Policy / Research Analyst": [
-        "Policy memo writing and evidence synthesis",
-        "Public datasets: RBI, World Bank, MOSPI, NFHS, data.gov.in",
-        "Research methods: source quality, citations, literature review",
-        "Excel/Sheets analysis and visualization",
-        "Briefing note and stakeholder presentation writing",
-    ],
-    "Software / AI Builder": [
-        "Python programming fundamentals",
-        "Web basics: HTML, CSS, JavaScript, APIs",
-        "Backend basics: FastAPI, databases, auth",
-        "AI app building: RAG, tool calling, agents",
-        "GitHub portfolio and deployment",
-    ],
-}
+MAX_EVIDENCE = 24
+EVIDENCE_CHARS = 6000  # cap evidence sent to the synthesis prompt
 
 
+# ---------------------------------------------------------------- normalize
 def normalize_profile(state: AgentState) -> AgentState:
-    candidate = state["candidate"]
-    interests = [item.strip() for item in candidate.get("interests", "").split(";") if item.strip()]
-    worries = [item.strip() for item in candidate.get("worries", "").split(";") if item.strip()]
-    normalized = {
-        "age_group": candidate.get("age_group", ""),
-        "qualification": candidate.get("qualification", ""),
-        "background": candidate.get("background", ""),
-        "exams": candidate.get("exams", ""),
-        "years_preparing": candidate.get("years_preparing", ""),
-        "current_situation": candidate.get("current_situation", ""),
-        "main_stress": candidate.get("main_stress", ""),
-        "worries": worries,
-        "interests": interests,
-        "story": candidate.get("situation_words", ""),
-        "trust_factor": candidate.get("trust_factor", ""),
-        "price_preference": candidate.get("price_preference", ""),
+    c = state["candidate"]
+    split = lambda s: [x.strip() for x in str(s or "").replace(",", ";").split(";") if x.strip()]
+    return {
+        "normalized": {
+            "age_group": c.get("age_group", ""),
+            "qualification": c.get("qualification", ""),
+            "background": c.get("background", ""),
+            "exams": c.get("exams", ""),
+            "years_preparing": c.get("years_preparing", ""),
+            "current_situation": c.get("current_situation", ""),
+            "main_stress": c.get("main_stress", ""),
+            "worries": split(c.get("worries", "")),
+            "interests": split(c.get("interests", "")),
+            "story": c.get("situation_words", ""),
+        }
     }
-    return {"normalized": normalized}
 
 
-def diagnose_candidate(state: AgentState) -> AgentState:
-    profile = state["normalized"]
-    background = profile["background"].lower()
-    years = profile["years_preparing"]
-    stress = profile["main_stress"].lower()
-
-    if "more than 6" in years or "5-6" in years:
-        stage = "long-preparation transition"
-    elif "less than 1" in years:
-        stage = "early hedging"
-    else:
-        stage = "mid-preparation pivot"
-
-    if any(token in background for token in ["b.tech", "btech", "computer", "information technology", "engineering", "mechanical", "electrical"]):
-        base = "technical graduate"
-    elif any(token in background for token in ["political", "economics", "ba"]):
-        base = "social-science graduate"
-    elif any(token in background for token in ["pharma", "pharmaceutical"]):
-        base = "domain specialist"
-    else:
-        base = "generalist"
-
-    urgency = "high" if any(token in stress for token in ["financial", "gap", "old", "family"]) else "medium"
-    diagnosis = {
-        "stage": stage,
-        "base": base,
-        "urgency": urgency,
-        "core_problem": profile["main_stress"] or "unclear next step",
-        "narrative": (
-            f"This candidate is a {base} in a {stage} phase. The core transition blocker is "
-            f"{profile['main_stress'] or 'lack of clarity'}, so the blueprint must reduce ambiguity, "
-            "create quick proof of skill, and avoid long unfocused preparation cycles."
-        ),
-    }
-    return {"diagnosis": diagnosis}
+# ---------------------------------------------------------------- research
+def research(state: AgentState) -> AgentState:
+    queries = _plan_queries(state["normalized"])
+    evidence = _tavily_search(queries)
+    logger.info("research: %d queries, %d evidence items", len(queries), len(evidence))
+    return {"queries": queries, "evidence": evidence}
 
 
-def extract_transferable_skills(state: AgentState) -> AgentState:
-    profile = state["normalized"]
-    skills = [
-        "structured reading and synthesis",
-        "long-form discipline under uncertainty",
-        "current-affairs and governance awareness",
-        "analytical writing",
-        "exam-style quantitative reasoning",
-        "self-study planning",
+def _plan_queries(profile: dict[str, Any]) -> list[str]:
+    prompt = f"""You are planning live web research to build a career-transition plan for an Indian competitive-exam aspirant moving into a new career. Bias toward tech / data / AI roles where the background genuinely supports it, but stay realistic.
+
+Candidate:
+{json.dumps(profile, ensure_ascii=False, indent=2)}
+
+Write 5 focused web-search queries that will surface: (1) realistic roles that fit this background, (2) in-demand skills for those roles in India in 2026, (3) specific well-rated online courses (Udemy, Coursera, etc.) for those skills, (4) how someone with this background breaks in, (5) current hiring/demand signals.
+
+Return ONLY JSON: {{"queries": ["q1","q2","q3","q4","q5"]}}"""
+    result = complete_json(prompt, task="research", temperature=0.3, max_tokens=500)
+    if result and isinstance(result.get("queries"), list) and result["queries"]:
+        return [str(q) for q in result["queries"] if str(q).strip()][:6]
+
+    bg = profile.get("background") or "graduate"
+    return [
+        f"best entry-level data and AI roles in India 2026 for a {bg}",
+        "most in-demand data and AI skills India 2026",
+        "top rated Udemy Coursera courses data analytics python SQL 2026",
+        f"how to transition from {bg} into a data or AI career India",
+        "entry level AI data analyst hiring demand India 2026",
     ]
-    interests = " ".join(profile.get("interests", [])).lower()
-    background = profile.get("background", "").lower()
-    if any(token in background for token in ["b.tech", "btech", "computer", "it", "engineering"]):
-        skills.extend(["technical learning capacity", "systems thinking", "quantitative problem solving"])
-    if "policy" in interests or "research" in interests:
-        skills.extend(["policy framing", "research summarization"])
-    if "data" in interests or "ai" in interests:
-        skills.extend(["data curiosity", "automation mindset"])
-    return {"skills": list(dict.fromkeys(skills))}
 
 
-def research_market(state: AgentState) -> AgentState:
+def _tavily_search(queries: list[str]) -> list[dict[str, str]]:
     settings = get_settings()
+    if not settings.tavily_api_key:
+        return []
+    evidence: list[dict[str, str]] = []
+    try:
+        from tavily import TavilyClient
+
+        client = TavilyClient(api_key=settings.tavily_api_key)
+        for q in queries:
+            try:
+                res = client.search(query=q, max_results=4, search_depth="basic")
+            except Exception as exc:  # one query failing shouldn't sink the rest
+                logger.warning("tavily query failed (%s): %s", q, exc)
+                continue
+            for item in res.get("results", []):
+                evidence.append(
+                    {
+                        "query": q,
+                        "title": item.get("title", ""),
+                        "url": item.get("url", ""),
+                        "content": (item.get("content", "") or "")[:600],
+                    }
+                )
+    except Exception as exc:
+        logger.warning("tavily unavailable: %s", exc)
+    return evidence[:MAX_EVIDENCE]
+
+
+# ---------------------------------------------------------------- synthesize
+def synthesize(state: AgentState) -> AgentState:
     profile = state["normalized"]
-    queries = [
-        f"site:ycombinator.com/jobs entry level AI operations data analyst skills {profile['background']}",
-        "site:wellfound.com/jobs AI data analyst product operations startup skills India",
-        "entry level AI analyst data analyst skills India 2026",
-    ]
-    signals: list[dict[str, str]] = []
-    if settings.tavily_api_key:
-        try:
-            from tavily import TavilyClient
-
-            client = TavilyClient(api_key=settings.tavily_api_key)
-            for query in queries:
-                result = client.search(query=query, max_results=3, search_depth="basic")
-                for item in result.get("results", []):
-                    signals.append(
-                        {
-                            "source": item.get("url", "Tavily"),
-                            "title": item.get("title", "Market signal"),
-                            "content": item.get("content", "")[:500],
-                        }
-                    )
-        except Exception as exc:
-            signals.append({"source": "Tavily unavailable", "title": str(exc), "content": ""})
-
-    if not signals:
-        signals = [
-            {
-                "source": "Fallback market model",
-                "title": "AI-assisted data analysis, SQL, Python, automation, and product operations remain strong transition skills.",
-                "content": "Use live Tavily search in production to refresh this evidence per candidate.",
-            },
-            {
-                "source": "Fallback market model",
-                "title": "Startups value proof-of-work portfolios more than exam-preparation narratives.",
-                "content": "Roadmaps should include public projects, dashboards, case studies, and concise GitHub/Notion artifacts.",
-            },
-        ]
-    return {"market": signals[:8]}
-
-
-def generate_paths(state: AgentState) -> AgentState:
-    profile = state["normalized"]
-    diagnosis = state["diagnosis"]
-    interests = " ".join(profile.get("interests", [])).lower()
-    background = profile.get("background", "").lower()
-
-    candidates = []
-    if "data" in interests or "ai" in interests or "economics" in background:
-        candidates.append(("Data Analyst", 88))
-    if "ai" in interests or "product" in interests or "operations" in interests:
-        candidates.append(("AI Product / Operations Analyst", 84))
-    if "policy" in interests or "research" in interests or "political" in background or "pharma" in background:
-        candidates.append(("Policy / Research Analyst", 82))
-    if any(token in background for token in ["computer", "information technology", "btech computer", "software"]):
-        candidates.append(("Software / AI Builder", 80))
-    if not candidates:
-        candidates = [("Data Analyst", 78), ("AI Product / Operations Analyst", 74), ("Policy / Research Analyst", 72)]
-
-    for fallback in [("Policy / Research Analyst", 76), ("Data Analyst", 74), ("AI Product / Operations Analyst", 72), ("Software / AI Builder", 70)]:
-        candidates.append(fallback)
-
-    deduped: list[tuple[str, int]] = []
-    seen = set()
-    for title, score in sorted(candidates, key=lambda item: item[1], reverse=True):
-        if title not in seen:
-            seen.add(title)
-            deduped.append((title, score))
-
-    paths = []
-    for rank, (title, score) in enumerate(deduped[:3], start=1):
-        paths.append(
-            {
-                "rank": rank,
-                "title": title,
-                "score": score,
-                "why": (
-                    f"{title} fits because it converts the candidate's {diagnosis['base']} background, "
-                    f"UPSC-style synthesis, and stated interests into visible market proof within 8-12 weeks."
-                ),
-                "proof_points": [
-                    "Can be validated through a small portfolio before applying.",
-                    "Does not require hiding the exam gap; the gap can be reframed as structured preparation.",
-                    "Creates optionality across startups, services firms, nonprofits, and domain teams.",
-                ],
-            }
-        )
-    return {"paths": paths}
-
-
-def build_roadmap(state: AgentState) -> AgentState:
-    paths = state["paths"]
-    primary = paths[0]["title"]
-    topics = BASE_COURSES.get(primary, BASE_COURSES["Data Analyst"])
-    weekly_plan = []
-    for week in range(1, 13):
-        topic = topics[(week - 1) % len(topics)]
-        if week <= 4:
-            phase = "Foundation"
-        elif week <= 8:
-            phase = "Portfolio"
-        else:
-            phase = "Applications"
-        weekly_plan.append(
-            {
-                "week": week,
-                "theme": f"{phase}: {topic}",
-                "topics": [
-                    topic,
-                    "Create notes in public-proof format: Notion, GitHub README, or PDF case note.",
-                    "Spend 3 hours applying the concept to an India-relevant dataset or workflow.",
-                ],
-                "output": f"One visible artifact connected to {primary.lower()}.",
-            }
-        )
-
-    projects = [
-        {
-            "name": "UPSC Prep to Employability Dashboard",
-            "description": "Analyze time spent, syllabus coverage, mock scores, and skill transfer into a dashboard that demonstrates analytics and storytelling.",
-            "skills": ["Excel/Sheets", "data cleaning", "dashboarding", "narrative insight"],
-        },
-        {
-            "name": "AI Career Research Agent",
-            "description": "Build a small tool that searches jobs, extracts required skills, and summarizes weekly learning priorities.",
-            "skills": ["Python", "APIs", "LLM prompting", "market research"],
-        },
-        {
-            "name": "Policy or Market Brief",
-            "description": "Write a 4-page evidence-backed brief on one public issue or startup sector using structured sources and charts.",
-            "skills": ["research", "writing", "source evaluation", "visualization"],
-        },
-    ]
-    return {"roadmap": {"weekly_plan": weekly_plan, "projects": projects}}
-
-
-def write_blueprint(state: AgentState) -> AgentState:
-    profile = state["normalized"]
-    diagnosis = state["diagnosis"]
     tier = state.get("tier", "mini")
     language = state.get("language", "english")
-    path_count = 1 if tier == "sample" else 3
-    weekly_count = 4 if tier == "sample" else 12
-    ai_blueprint = _try_ai_blueprint(state, path_count, weekly_count, language)
-    if ai_blueprint:
-        summary = f"Generated AI {tier} blueprint with {len(ai_blueprint.get('paths', []))} path(s) and {len(ai_blueprint.get('weekly_plan', []))} weekly steps."
-        return {"blueprint": ai_blueprint, "summary": summary}
+    sample = tier == "sample"
+    path_count = 2 if sample else 3
 
-    blueprint = {
+    prompt = _synthesis_prompt(profile, state.get("evidence", []), path_count, sample, language)
+    parsed = complete_json(prompt, task="blueprint", temperature=0.4, max_tokens=8000)
+
+    blueprint = _normalize_blueprint(parsed, profile, path_count) if parsed else _fallback_blueprint(profile, path_count, sample)
+    return {"blueprint": blueprint, "summary": _summary(blueprint, tier)}
+
+
+def _synthesis_prompt(profile: dict[str, Any], evidence: list[dict[str, str]], path_count: int, sample: bool, language: str) -> str:
+    plan_rule = (
+        "Include a SHORT preview plan of only the first 5-6 days (this is a free sample)."
+        if sample
+        else (
+            "Include a COMPLETE day-by-day plan. Choose total_days yourself based on how much this "
+            "person realistically needs to become job-ready (usually 21-60 days) and justify it in 'rationale'. "
+            "Do NOT force a fixed length. Sequence days so skills build on each other; never repeat a day."
+        )
+    )
+    return f"""You are a senior career-transition advisor for Indian UPSC / competitive-exam aspirants moving into new careers. Write in {language}. Be specific, honest, empathetic, and evidence-grounded. No generic motivation. Reframe their exam years as real transferable capability — never hide the gap, reposition it.
+
+Bias recommendations toward tech / data / AI roles where the background genuinely supports it, but stay realistic — do not force a tech path onto someone it does not fit.
+
+CANDIDATE:
+{json.dumps(profile, ensure_ascii=False, indent=2)}
+
+LIVE RESEARCH EVIDENCE (use for REAL course names/providers/URLs and current market signals; cite URLs you actually use; never invent URLs):
+{json.dumps(evidence, ensure_ascii=False)[:EVIDENCE_CHARS]}
+
+Produce exactly {path_count} career paths, ranked, each scored 0-100 for fit.
+
+{plan_rule}
+For each day: name concrete topics, attach a specific real course from the evidence where relevant (name + provider + url), and give one small daily task/deliverable. Keep each day concise but concrete.
+
+Return ONLY valid JSON with EXACTLY this schema:
+{{
+  "snapshot": {{"age_group":"","qualification":"","background":"","exam_history":"","current_situation":"","main_stress":"","interests":""}},
+  "diagnosis": "150-220 word honest, specific read of where they stand and the way forward",
+  "strengths": ["8-12 concrete transferable strengths"],
+  "paths": [{{"rank":1,"title":"","score":0,"why":"specific fit rationale grounded in their background and the market","proof_points":["","",""]}}],
+  "plan": {{
+    "total_days": 0,
+    "rationale": "why this length fits this person",
+    "days": [{{"day":1,"focus":"","topics":["",""],"courses":[{{"name":"","provider":"","url":""}}],"task":""}}]
+  }},
+  "projects": [{{"name":"","description":"","skills":["",""]}}],
+  "resume_bullets": ["4-6 truthful resume bullets reframing exam prep plus new skills"],
+  "market_signals": [{{"source":"","title":"","url":""}}]
+}}
+
+Rules:
+- Exactly {path_count} paths.
+- Courses must be real and findable — prefer ones named in the evidence; never invent fake URLs.
+- Do not mention being an AI model."""
+
+
+def _normalize_blueprint(bp: dict[str, Any], profile: dict[str, Any], path_count: int) -> dict[str, Any]:
+    if not isinstance(bp, dict):
+        return _fallback_blueprint(profile, path_count, sample=False)
+
+    snap = bp.get("snapshot") if isinstance(bp.get("snapshot"), dict) else {}
+    defaults = {
+        "age_group": profile.get("age_group", ""),
+        "qualification": profile.get("qualification", ""),
+        "background": profile.get("background", ""),
+        "exam_history": profile.get("exams", ""),
+        "current_situation": profile.get("current_situation", ""),
+        "main_stress": profile.get("main_stress", ""),
+        "interests": "; ".join(profile.get("interests", [])),
+    }
+    bp["snapshot"] = {k: (snap.get(k) or v) for k, v in defaults.items()}
+
+    bp["diagnosis"] = bp.get("diagnosis") or ""
+    bp["strengths"] = [s for s in bp.get("strengths", []) if s] if isinstance(bp.get("strengths"), list) else []
+    bp["paths"] = [p for p in bp.get("paths", []) if isinstance(p, dict)][:path_count] if isinstance(bp.get("paths"), list) else []
+
+    plan = bp.get("plan") if isinstance(bp.get("plan"), dict) else {}
+    plan["days"] = [d for d in plan.get("days", []) if isinstance(d, dict)] if isinstance(plan.get("days"), list) else []
+    plan["total_days"] = plan.get("total_days") or len(plan["days"])
+    plan["rationale"] = plan.get("rationale") or ""
+    bp["plan"] = plan
+
+    bp["projects"] = [p for p in bp.get("projects", []) if isinstance(p, dict)] if isinstance(bp.get("projects"), list) else []
+    bp["resume_bullets"] = [b for b in bp.get("resume_bullets", []) if b] if isinstance(bp.get("resume_bullets"), list) else []
+    bp["market_signals"] = [m for m in bp.get("market_signals", []) if isinstance(m, dict)] if isinstance(bp.get("market_signals"), list) else []
+    return bp
+
+
+def _summary(bp: dict[str, Any], tier: str) -> str:
+    paths = bp.get("paths", [])
+    top = paths[0].get("title", "your next path") if paths else "your next path"
+    days = len(bp.get("plan", {}).get("days", []))
+    kind = "sample" if tier == "sample" else "full"
+    return f"Your {kind} blueprint: {len(paths)} fitted path(s) led by {top}, with a {days}-day learning plan."
+
+
+def _fallback_blueprint(profile: dict[str, Any], path_count: int, sample: bool) -> dict[str, Any]:
+    # ponytail: last-resort only — fires only when BOTH OpenAI and Groq are unavailable.
+    logger.warning("synthesis unavailable — using deterministic fallback blueprint")
+    paths = [
+        {"rank": 1, "title": "Data Analyst", "score": 82, "why": "Converts your research, synthesis, and quantitative discipline into a fast, portfolio-provable path.", "proof_points": ["Provable via a small dashboard portfolio", "Exam gap reframes cleanly as structured self-study", "Strong entry-level demand in India"]},
+        {"rank": 2, "title": "AI Product / Operations Analyst", "score": 78, "why": "Uses your writing, documentation, and process discipline in fast-growing AI-adjacent roles.", "proof_points": ["Low coding barrier to start", "Values written clarity you already have", "Growing at startups and services firms"]},
+        {"rank": 3, "title": "Junior AI / Software Builder", "score": 74, "why": "If you enjoy building, exam-grade discipline transfers well to learning to code.", "proof_points": ["GitHub portfolio proves skill directly", "Clear self-study path", "High ceiling"]},
+    ][:path_count]
+    n = 6 if sample else 21
+    days = [
+        {"day": d, "focus": f"Foundation day {d}", "topics": ["Core concept for the day", "Hands-on practice"], "courses": [], "task": "Produce one small visible artifact (note, sheet, or repo commit)."}
+        for d in range(1, n + 1)
+    ]
+    return {
         "snapshot": {
             "age_group": profile.get("age_group", ""),
             "qualification": profile.get("qualification", ""),
@@ -282,167 +236,36 @@ def write_blueprint(state: AgentState) -> AgentState:
             "main_stress": profile.get("main_stress", ""),
             "interests": "; ".join(profile.get("interests", [])),
         },
-        "diagnosis": diagnosis["narrative"],
-        "strengths": state["skills"],
-        "paths": state["paths"][:path_count],
-        "weekly_plan": state["roadmap"]["weekly_plan"][:weekly_count],
-        "projects": state["roadmap"]["projects"][: 1 if tier == "sample" else 3],
-        "resume_bullets": [
-            "Reframed competitive-exam preparation into structured research, high-volume self-learning, and analytical writing.",
-            "Built portfolio projects demonstrating data analysis, AI-assisted research, and decision-support communication.",
-            "Converted governance/current-affairs knowledge into business, policy, or product context depending on target role.",
-        ],
-        "market_signals": state["market"],
+        "diagnosis": "We could not reach the AI service to generate a fully personalized read just now. This is a safe fallback plan; regenerate for a tailored version.",
+        "strengths": ["Structured self-study", "Analytical writing", "Research synthesis", "Discipline under pressure", "Current-affairs awareness", "Quantitative reasoning"],
+        "paths": paths,
+        "plan": {"total_days": n, "rationale": "Baseline foundation plan.", "days": days},
+        "projects": [{"name": "Portfolio starter project", "description": "A small, visible project that proves one job-relevant skill.", "skills": ["analysis", "communication"]}],
+        "resume_bullets": ["Reframed competitive-exam preparation as structured research and analytical writing.", "Building portfolio projects to prove job-relevant skills."],
+        "market_signals": [],
     }
-    summary = f"Generated {tier} blueprint with {len(blueprint['paths'])} path(s) and {len(blueprint['weekly_plan'])} weekly steps."
-    return {"blueprint": blueprint, "summary": summary}
 
 
-def _try_ai_blueprint(state: AgentState, path_count: int, weekly_count: int, language: str) -> dict[str, Any] | None:
-    prompt = _blueprint_prompt(state, path_count, weekly_count, language)
-    parsed = complete_json(prompt, task="blueprint", temperature=0.35)
-    if parsed is None:
-        return None
-    try:
-        return _normalize_ai_blueprint(parsed, state, path_count, weekly_count)
-    except Exception:
-        return None
-
-
-def _blueprint_prompt(state: AgentState, path_count: int, weekly_count: int, language: str) -> str:
-    profile = state["normalized"]
-    return f"""
-You are an expert career transition strategist for Indian UPSC/competitive-exam aspirants moving into realistic careers.
-
-Create a deeply personalized transition blueprint in {language}. Be practical, empathetic, specific, and market-aware.
-Do not give generic motivation. Convert the candidate's exam years into credible career positioning.
-
-Candidate profile JSON:
-{json.dumps(profile, ensure_ascii=False, indent=2)}
-
-Diagnosis:
-{json.dumps(state["diagnosis"], ensure_ascii=False, indent=2)}
-
-Transferable skills:
-{json.dumps(state["skills"], ensure_ascii=False, indent=2)}
-
-Initial career paths:
-{json.dumps(state["paths"][:path_count], ensure_ascii=False, indent=2)}
-
-Market signals from search:
-{json.dumps(state["market"], ensure_ascii=False, indent=2)}
-
-Return ONLY valid JSON with this exact schema:
-{{
-  "snapshot": {{
-    "age_group": "...",
-    "qualification": "...",
-    "background": "...",
-    "exam_history": "...",
-    "current_situation": "...",
-    "main_stress": "...",
-    "interests": "..."
-  }},
-  "diagnosis": "A detailed 150-220 word diagnosis.",
-  "strengths": ["8-12 transferable strengths"],
-  "paths": [
-    {{
-      "rank": 1,
-      "title": "Career path name",
-      "score": 0,
-      "why": "Specific fit rationale.",
-      "proof_points": ["specific point", "specific point", "specific point"]
-    }}
-  ],
-  "weekly_plan": [
-    {{
-      "week": 1,
-      "theme": "Theme",
-      "topics": ["course/topic 1", "course/topic 2", "course/topic 3"],
-      "output": "Concrete weekly deliverable"
-    }}
-  ],
-  "projects": [
-    {{
-      "name": "Project name",
-      "description": "Specific project brief tied to hot market skills.",
-      "skills": ["skill 1", "skill 2", "skill 3"]
-    }}
-  ],
-  "resume_bullets": ["5 resume bullets"],
-  "market_signals": [
-    {{"source": "source name or URL", "title": "market signal"}}
-  ]
-}}
-
-Constraints:
-- Include exactly {path_count} career paths.
-- Include exactly {weekly_count} weekly roadmap items.
-- Include courses/topics week by week, not vague advice.
-- Include projects based on AI/data/software/policy/product market demand where relevant.
-- Make the plan realistic for someone with gap years and low confidence.
-- Do not mention that you are an AI model.
-"""
-
-
-def _normalize_ai_blueprint(
-    blueprint: dict[str, Any], state: AgentState, path_count: int, weekly_count: int
-) -> dict[str, Any]:
-    fallback = {
-        "snapshot": {
-            "age_group": state["normalized"].get("age_group", ""),
-            "qualification": state["normalized"].get("qualification", ""),
-            "background": state["normalized"].get("background", ""),
-            "exam_history": state["normalized"].get("exams", ""),
-            "current_situation": state["normalized"].get("current_situation", ""),
-            "main_stress": state["normalized"].get("main_stress", ""),
-            "interests": "; ".join(state["normalized"].get("interests", [])),
-        },
-        "diagnosis": state["diagnosis"]["narrative"],
-        "strengths": state["skills"],
-        "paths": state["paths"][:path_count],
-        "weekly_plan": state["roadmap"]["weekly_plan"][:weekly_count],
-        "projects": state["roadmap"]["projects"],
-        "resume_bullets": [],
-        "market_signals": state["market"],
-    }
-    for key, value in fallback.items():
-        blueprint.setdefault(key, value)
-    blueprint["paths"] = blueprint["paths"][:path_count]
-    blueprint["weekly_plan"] = blueprint["weekly_plan"][:weekly_count]
-    if not blueprint["projects"]:
-        blueprint["projects"] = fallback["projects"]
-    if not blueprint["market_signals"]:
-        blueprint["market_signals"] = fallback["market_signals"]
-    return blueprint
-
-
+# ---------------------------------------------------------------- export
 def export_pdf(state: AgentState) -> AgentState:
-    candidate_id = int(state["candidate"]["id"])
+    candidate_id = int(state["candidate"].get("id", 0))
     tier = state.get("tier", "mini")
     path = export_blueprint_pdf(state["blueprint"], candidate_id, tier)
     return {"pdf_path": str(path)}
 
 
+# ---------------------------------------------------------------- graph
 def build_graph():
     graph = StateGraph(AgentState)
     graph.add_node("normalize_profile", normalize_profile)
-    graph.add_node("diagnose_candidate", diagnose_candidate)
-    graph.add_node("extract_transferable_skills", extract_transferable_skills)
-    graph.add_node("research_market", research_market)
-    graph.add_node("generate_paths", generate_paths)
-    graph.add_node("build_roadmap", build_roadmap)
-    graph.add_node("write_blueprint", write_blueprint)
+    graph.add_node("research", research)
+    graph.add_node("synthesize", synthesize)
     graph.add_node("export_pdf", export_pdf)
 
     graph.set_entry_point("normalize_profile")
-    graph.add_edge("normalize_profile", "diagnose_candidate")
-    graph.add_edge("diagnose_candidate", "extract_transferable_skills")
-    graph.add_edge("extract_transferable_skills", "research_market")
-    graph.add_edge("research_market", "generate_paths")
-    graph.add_edge("generate_paths", "build_roadmap")
-    graph.add_edge("build_roadmap", "write_blueprint")
-    graph.add_edge("write_blueprint", "export_pdf")
+    graph.add_edge("normalize_profile", "research")
+    graph.add_edge("research", "synthesize")
+    graph.add_edge("synthesize", "export_pdf")
     graph.add_edge("export_pdf", END)
     return graph.compile()
 

@@ -37,6 +37,8 @@ TASK_ROUTES: dict[str, list[str]] = {
     "default": ["openai", "groq", "anthropic"],
     "blueprint": ["openai", "groq", "anthropic"],
     "resume": ["openai", "groq", "anthropic"],
+    # research query-planning is cheap/high-volume — prefer the cheapest provider
+    "research": ["groq", "openai", "anthropic"],
 }
 
 
@@ -49,7 +51,7 @@ def complete(prompt: str, task: str = "default", temperature: float = 0.3, max_t
     for provider in TASK_ROUTES.get(task, TASK_ROUTES["default"]):
         try:
             if provider in ("openai", "groq"):
-                text = _openai_compatible(provider, prompt, temperature, settings)
+                text = _openai_compatible(provider, prompt, temperature, max_tokens, settings)
             elif provider == "anthropic":
                 text = _anthropic(prompt, max_tokens, settings)
             else:
@@ -76,7 +78,7 @@ def complete_json(prompt: str, task: str = "default", temperature: float = 0.3, 
         return None
 
 
-def _openai_compatible(provider: str, prompt: str, temperature: float, settings: Settings) -> str | None:
+def _openai_compatible(provider: str, prompt: str, temperature: float, max_tokens: int, settings: Settings) -> str | None:
     if provider == "openai":
         api_key, base_url, model = settings.openai_api_key, None, settings.openai_model
     else:  # groq
@@ -91,6 +93,7 @@ def _openai_compatible(provider: str, prompt: str, temperature: float, settings:
         model=model,
         messages=[{"role": "user", "content": prompt}],
         temperature=temperature,
+        max_tokens=max_tokens,
     )
     return response.choices[0].message.content
 

@@ -75,22 +75,35 @@ def export_blueprint_pdf(blueprint: dict[str, Any], candidate_id: int, tier: str
     story.append(_bullets(blueprint.get("strengths", []), styles["BodyText"]))
 
     story.append(_para("Recommended Career Paths", styles["Section"]))
-    for path in blueprint.get("paths", []):
-        story.append(_para(f"{path['rank']}. {path['title']} - Fit Score {path['score']}/100", styles["Heading3"]))
-        story.append(_para(path["why"], styles["BodyText"]))
+    for i, path in enumerate(blueprint.get("paths", []), start=1):
+        rank = path.get("rank", i)
+        story.append(_para(f"{rank}. {path.get('title', 'Career path')} - Fit Score {path.get('score', '-')}/100", styles["Heading3"]))
+        story.append(_para(path.get("why", ""), styles["BodyText"]))
         story.append(_bullets(path.get("proof_points", []), styles["BodyText"]))
 
     story.append(PageBreak())
-    story.append(_para("Weekly Roadmap", styles["Section"]))
-    for week in blueprint.get("weekly_plan", []):
-        story.append(_para(f"Week {week['week']}: {week['theme']}", styles["Heading3"]))
-        story.append(_bullets(week.get("topics", []), styles["BodyText"]))
-        story.append(_para(f"Output: {week.get('output', '')}", styles["Tight"]))
+    plan = blueprint.get("plan", {}) if isinstance(blueprint.get("plan"), dict) else {}
+    days = plan.get("days", [])
+    story.append(_para(f"Your Day-by-Day Plan ({plan.get('total_days', len(days))} days)", styles["Section"]))
+    if plan.get("rationale"):
+        story.append(_para(plan["rationale"], styles["Tight"]))
+        story.append(Spacer(1, 6))
+    for i, day in enumerate(days, start=1):
+        story.append(_para(f"Day {day.get('day', i)}: {day.get('focus', '')}", styles["Heading3"]))
+        if day.get("topics"):
+            story.append(_bullets(day.get("topics", []), styles["BodyText"]))
+        for course in day.get("courses", []) or []:
+            label = " - ".join(x for x in [course.get("name"), course.get("provider")] if x)
+            url = course.get("url", "")
+            story.append(_para(f"Course: {label} {url}".strip(), styles["Tight"]))
+        if day.get("task"):
+            story.append(_para(f"Task: {day['task']}", styles["Tight"]))
 
+    story.append(PageBreak())
     story.append(_para("Projects", styles["Section"]))
     for project in blueprint.get("projects", []):
-        story.append(_para(project["name"], styles["Heading3"]))
-        story.append(_para(project["description"], styles["BodyText"]))
+        story.append(_para(project.get("name", "Project"), styles["Heading3"]))
+        story.append(_para(project.get("description", ""), styles["BodyText"]))
         story.append(_bullets(project.get("skills", []), styles["BodyText"]))
 
     story.append(_para("Resume Positioning", styles["Section"]))

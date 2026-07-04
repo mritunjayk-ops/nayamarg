@@ -155,11 +155,8 @@ class AgentState(TypedDict, total=False):
     tier: str
     language: str
     normalized: dict[str, Any]
-    diagnosis: dict[str, Any]
-    skills: list[str]
-    market: list[dict[str, str]]
-    paths: list[dict[str, Any]]
-    roadmap: dict[str, Any]
+    queries: list[str]
+    evidence: list[dict[str, str]]
     blueprint: dict[str, Any]
     pdf_path: str
     summary: str
