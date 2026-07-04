@@ -96,6 +96,7 @@ def generate(request: GenerateRequest):
         status="ready",
         pdf_url=f"/api/pdfs/{pdf_path.name}",
         summary=result["summary"],
+        blueprint=result.get("blueprint"),
     )
 
 
@@ -116,6 +117,7 @@ def generate_from_intake(request: IntakeGenerateRequest):
         status="ready",
         pdf_url=f"/api/pdfs/{pdf_path.name}",
         summary=result["summary"],
+        blueprint=result.get("blueprint"),
     )
 
 

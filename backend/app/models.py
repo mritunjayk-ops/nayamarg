@@ -57,6 +57,7 @@ class GenerateResponse(BaseModel):
     status: str
     pdf_url: str
     summary: str
+    blueprint: dict[str, Any] | None = None
 
 
 class PaymentPlanResponse(BaseModel):
