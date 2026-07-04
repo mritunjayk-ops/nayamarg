@@ -66,7 +66,7 @@ export default function Home() {
             </h1>
             <p className="lede reveal d3">
               NayaMarg turns your exam preparation into a real, personalized career plan —
-              the roles that genuinely fit your background, and the weekly steps to get there.
+              the roles that genuinely fit your background, and the exact topics to master to get there.
             </p>
             <div className="hero-actions reveal d4">
               <a className="btn btn-primary" href="#start">
@@ -75,7 +75,7 @@ export default function Home() {
             </div>
             <div className="hero-meta reveal d5">
               <div className="stat"><div className="n">3</div><div className="l">career paths, scored for fit</div></div>
-              <div className="stat"><div className="n">12 weeks</div><div className="l">of concrete roadmap</div></div>
+              <div className="stat"><div className="n">Topic-based</div><div className="l">plan you check off as you learn</div></div>
               <div className="stat"><div className="n">₹149</div><div className="l">for the full blueprint</div></div>
             </div>
           </div>

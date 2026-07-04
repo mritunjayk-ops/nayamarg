@@ -11,4 +11,20 @@ The long-term vision is a complete transition companion:
 - assessments to measure progress,
 - and pathways into internships and jobs.
 
+## A look inside
+
+The landing experience:
+
+![NayaMarg landing page](docs/screenshots/landing.png)
+
+Every blueprint recommends career paths scored for fit, grounded in live market research:
+
+![Career paths scored for fit](docs/screenshots/paths.png)
+
+…and a realistic, topic-by-topic learning plan — real courses, honest time estimates, and progress tracked by what you complete rather than a countdown of days:
+
+![Topic-based learning plan](docs/screenshots/plan.png)
+
+---
+
 Built with Python and Next.js. In active early development.
